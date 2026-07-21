@@ -1,0 +1,6 @@
+Checkout version test log (from PR body)
+PR: #2 (fds)
+Timestamp: 2026-07-21T05:27:07Z
+Detected version: v6
+
+[success] actions/checkout@v6 (this is the version detected from the PR body)
