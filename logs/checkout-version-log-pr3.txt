@@ -1,0 +1,6 @@
+Checkout version test log (from PR body)
+PR: #3 (Update README.md)
+Timestamp: 2026-07-21T05:28:12Z
+Detected version: v5
+
+[success] actions/checkout@v5 (this is the version detected from the PR body)
