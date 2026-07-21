@@ -1,0 +1,180 @@
+name: Checkout Version From PR Body and Log
+
+# pull_request_target runs with the base repo's context/token even for PRs
+# from forks. This workflow only writes a log file back to the main repo's
+# base branch — it never executes the fork's own code.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: write        # needed to commit/push the log file back to the repo
+  pull-requests: write   # needed to merge the pull request
+
+jobs:
+  checkout-detected-version:
+    # remove this line if you want this to run for same-repo PRs too
+    if: github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Detect checkout@vN from PR body
+        id: detect
+        env:
+          # passed as an env var (not interpolated into the script) to avoid
+          # shell-injection from untrusted PR body text
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          VERSION=""
+          for i in 1 2 3 4 5 6 7; do
+            if echo "$PR_BODY" | grep -qiE "checkout@v${i}\b"; then
+              VERSION="v${i}"
+              break
+            fi
+          done
+
+          if [ -z "$VERSION" ]; then
+            echo "No checkout@vN (1-7) mention found in PR body. Defaulting to v4."
+            VERSION="v4"
+          fi
+
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # ---- uses: can't take a dynamic/step-output value, so we declare one
+      # step per version and gate each with `if:` — only the matching one runs.
+      - name: Checkout with v1
+        id: checkout_v1
+        if: steps.detect.outputs.version == 'v1'
+        continue-on-error: true
+        uses: actions/checkout@v1
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Checkout with v2
+        id: checkout_v2
+        if: steps.detect.outputs.version == 'v2'
+        continue-on-error: true
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Checkout with v3
+        id: checkout_v3
+        if: steps.detect.outputs.version == 'v3'
+        continue-on-error: true
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Checkout with v4
+        id: checkout_v4
+        if: steps.detect.outputs.version == 'v4'
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Checkout with v5
+        id: checkout_v5
+        if: steps.detect.outputs.version == 'v5'
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Checkout with v6
+        id: checkout_v6
+        if: steps.detect.outputs.version == 'v6'
+        continue-on-error: true
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Checkout with v7
+        id: checkout_v7
+        if: steps.detect.outputs.version == 'v7'
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Build log from checkout result
+        id: build_log
+        env:
+          DETECTED_VERSION: ${{ steps.detect.outputs.version }}
+          OUTCOME_V1: ${{ steps.checkout_v1.outcome }}
+          OUTCOME_V2: ${{ steps.checkout_v2.outcome }}
+          OUTCOME_V3: ${{ steps.checkout_v3.outcome }}
+          OUTCOME_V4: ${{ steps.checkout_v4.outcome }}
+          OUTCOME_V5: ${{ steps.checkout_v5.outcome }}
+          OUTCOME_V6: ${{ steps.checkout_v6.outcome }}
+          OUTCOME_V7: ${{ steps.checkout_v7.outcome }}
+        run: |
+          mkdir -p logs
+          LOGFILE="logs/checkout-version-log-pr${{ github.event.pull_request.number }}.txt"
+
+          {
+            echo "Checkout version test log (from PR body)"
+            echo "PR: #${{ github.event.pull_request.number }} (${{ github.event.pull_request.title }})"
+            echo "Timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Detected version: $DETECTED_VERSION"
+            echo ""
+            for i in 1 2 3 4 5 6 7; do
+              varname="OUTCOME_V$i"
+              outcome="${!varname}"
+              if [ "$outcome" != "skipped" ]; then
+                echo "[$outcome] actions/checkout@v$i (this is the version detected from the PR body)"
+              fi
+            done
+          } > "$LOGFILE"
+
+          cat "$LOGFILE"
+          echo "log_file=$LOGFILE" >> "$GITHUB_OUTPUT"
+
+          # Capture the single active outcome (the rest are 'skipped') so the
+          # merge step can gate on it.
+          for i in 1 2 3 4 5 6 7; do
+            varname="OUTCOME_V$i"
+            outcome="${!varname}"
+            if [ "$outcome" != "skipped" ]; then
+              echo "result=$outcome" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Commit and push log to main repository
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          LOGFILE="${{ steps.build_log.outputs.log_file }}"
+
+          git add "$LOGFILE"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: checkout version log for PR #${{ github.event.pull_request.number }}"
+            git push origin "HEAD:$BASE_BRANCH"
+          fi
+
+      - name: Print summary
+        if: always()
+        run: cat "${{ steps.build_log.outputs.log_file }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge pull request if checkout succeeded
+        if: steps.build_log.outputs.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checkout succeeded — merging PR #${{ github.event.pull_request.number }}"
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --merge \
+            --admin
